@@ -1506,7 +1506,7 @@ fn create_lock_file(path: &PathBuf, contents: &[u8]) -> Result<()> {
 
 #[cfg(unix)]
 fn write_private_file(path: &PathBuf, contents: &[u8]) -> Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
     let mut file = fs::OpenOptions::new()
         .create(true)
@@ -1515,6 +1515,8 @@ fn write_private_file(path: &PathBuf, contents: &[u8]) -> Result<()> {
         .mode(0o600)
         .open(path)
         .with_context(|| format!("failed to write config {}", path.display()))?;
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("failed to secure config {}", path.display()))?;
     file.write_all(contents)?;
     Ok(())
 }
@@ -1624,6 +1626,27 @@ mod tests {
     #[test]
     fn invalid_email_is_rejected() {
         assert!(provider_for_email("not-an-email").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_file_tightens_existing_permissions() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = std::env::temp_dir().join(format!(
+            "emailctl-private-file-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        fs::write(&path, b"old contents")?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))?;
+
+        write_private_file(&path, b"new contents")?;
+
+        let mode = fs::metadata(&path)?.permissions().mode() & 0o777;
+        fs::remove_file(path)?;
+        assert_eq!(mode, 0o600);
+        Ok(())
     }
 
     #[test]
